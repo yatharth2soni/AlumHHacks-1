@@ -855,7 +855,7 @@ function AppContent() {
       keyboardShouldPersistTaps="handled"
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => refresh({ silent: false })} colors={[C.green]} tintColor={C.green} />}
     >
-      {filteredDevices.length ? filteredDevices.map((device, index) => deviceView === 'compact' ? <DeviceCardCompact key={device.apiId || device.id || index} device={device} onPress={() => goToDevice(device)} /> : <DeviceCard key={device.apiId || device.id || index} device={device} onPress={() => goToDevice(device)} />) : <View style={styles.emptyBox}><Icon name="devices" size={28} color="#A4AAA5" /><Text style={styles.emptyText}>No devices match this search.</Text></View>}
+      {filteredDevices.length ? filteredDevices.map((device, index) => deviceView === 'compact' ? <DeviceCardCompact key={device.apiId || device.id || index} device={device} onPress={() => goToDevice(device)} /> : <DeviceCard key={device.apiId || device.id || index} device={device} onPress={() => goToDevice(device)} />) : <View style={styles.emptyBox}><Icon name="devices" size={28} color="#A4AAA5" /><Text style={styles.emptyText}>{devices.length === 0 ? 'No devices found in this project.' : `No devices match "${query}".`}</Text></View>}
       <Pressable onPress={() => { setPreviousRoute(route); setRoute('notifications'); }} style={styles.notificationsLink}><Icon name="bell-badge-outline" size={17} color={C.greenDark} /><Text style={styles.notificationsLinkText}>View notifications</Text><Icon name="chevron-right" size={18} color={C.muted} /></Pressable>
     </ScrollView>
   </View>;
