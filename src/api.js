@@ -125,16 +125,28 @@ export class GinjerClient {
   }
 
   async getProjects(organisation) {
+    const orgId = organisation?.organisationId || organisation?._id;
     try {
-      const result = await this.request(queries.projects, { params: { organisationId: organisation.organisationId } });
+      const result = await this.request(queries.projects, { params: { organisationId: orgId } });
       const list = asArray(result.projectOverview);
       if (list.length) return list;
     } catch (e) {
       console.warn('projectOverview query failed, falling back:', e.message);
     }
     try {
-      const result = await this.request(`query ProjectListFallback($params: ParamInput!) { projects(params: $params) { _id name description } }`, { params: { organisationId: organisation.organisationId } });
+      const result = await this.request(`query ProjectListFallback($params: ParamInput!) { projects(params: $params) { _id name description } }`, { params: { organisationId: orgId } });
       return asArray(result.projects);
+    } catch {
+      return [];
+    }
+  }
+
+  async getModules(organisation) {
+    const orgId = organisation?.organisationId || organisation?._id;
+    if (!orgId) return [];
+    try {
+      const res = await this.request(queries.modules, { params: { organisationId: orgId } });
+      return asArray(res.modules);
     } catch {
       return [];
     }
@@ -144,11 +156,12 @@ export class GinjerClient {
     if (!project || project._id === 'none') {
       return { devices: [], modules: [], errors: [] };
     }
-    const params = { organisationId: organisation.organisationId, projectId: project._id };
+    const orgId = organisation?.organisationId || organisation?._id;
+    const params = { organisationId: orgId, projectId: project._id };
     const [deviceResult, detailResult, moduleResult] = await Promise.allSettled([
       this.request(queries.devices, { params }),
       this.request(queries.details, { params }),
-      this.request(queries.modules, { params: { organisationId: organisation.organisationId } }),
+      this.request(queries.modules, { params: { organisationId: orgId } }),
     ]);
     const listed = deviceResult.status === 'fulfilled' ? flattenDevices(deviceResult.value?.projects) : [];
     const detailed = detailResult.status === 'fulfilled' ? flattenDevices(detailResult.value?.projects) : [];
@@ -168,9 +181,22 @@ export class GinjerClient {
   }
 
   async sendDownlink(organisation, device, moduleId, value) {
-    return this.request(queries.downlink, {
-      action: { organisationId: organisation.organisationId, deviceId: device.apiId, downlinkInterfaceId: moduleId, value },
-    });
+    const orgId = organisation?.organisationId || organisation?._id;
+    const devId = device?.apiId || device?._id;
+    if (!orgId) throw new Error('Downlink failed: Missing organization ID.');
+    if (!devId) throw new Error('Downlink failed: Missing device ID.');
+    if (!moduleId) throw new Error('Downlink failed: No Downlink Interface module configured in this organization.');
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new Error('Downlink payload must be a JSON object, e.g. {"command": "reset"}');
+    }
+    const action = {
+      organisationId: orgId,
+      deviceId: devId,
+      downlinkInterfaceId: moduleId,
+      value,
+    };
+    if (device?.networkId) action.networkId = device.networkId;
+    return this.request(queries.downlink, { action });
   }
 }
 

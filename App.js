@@ -323,6 +323,7 @@ function AppContent() {
   const [bannerNotice, setBannerNotice] = useState(null);
   const [downlinkSending, setDownlinkSending] = useState(false);
   const [downlinkSent, setDownlinkSent] = useState(false);
+  const [downlinkResultMsg, setDownlinkResultMsg] = useState('Command Dispatched!');
   const [autoRules, setAutoRules] = useState(DEMO_AUTOMATION_RULES.map(r => ({ ...r })));
   const [organizationQuery, setOrganizationQuery] = useState('');
   const [ginjerEnv, setGinjerEnv] = useState('dev');
@@ -426,7 +427,31 @@ function AppContent() {
   }, [query, positionableDevices, isFallbackDemo, showToast]);
 
 
+  const openDownlinkModal = useCallback(() => {
+    setDownlinkValue('{}');
+    setDownlinkResultMsg('Command Dispatched!');
+    const dlMods = modules.filter(m => m.moduleType === 'DOWNLINK_INTERFACE' || /downlink/i.test(m.label || '') || /downlink/i.test(m.moduleType || ''));
+    const chosen = dlMods[0] || modules.find(m => m.moduleType === 'DOWNLINK_INTERFACE') || modules[0];
+    setDownlinkModule(chosen?._id || '');
+    setModal('downlink');
+  }, [modules]);
+
   const sendQuickDownlink = useCallback(async (cmd) => {
+    const effectiveModuleId = downlinkModule ||
+      modules.find(m => m.moduleType === 'DOWNLINK_INTERFACE')?._id ||
+      modules.find(m => /downlink/i.test(m.label || '') || /downlink/i.test(m.moduleType || ''))?._id ||
+      modules[0]?._id;
+
+    if (isConnected && !effectiveModuleId) {
+      showToast('No Downlink Interface module configured in this organization.');
+      return;
+    }
+
+    if (isConnected && (!selectedDevice?.apiId && !selectedDevice?._id)) {
+      showToast('Selected device does not have a valid Ginjer ID.');
+      return;
+    }
+
     setDownlinkSending(true);
     setDownlinkSent(false);
     const loop = Animated.loop(
@@ -437,23 +462,26 @@ function AppContent() {
     );
     loop.start();
     try {
-      if (isConnected && client && selectedDevice?.apiId) {
-        await client.sendDownlink(activeOrganisation, selectedDevice, downlinkModule, cmd.value);
+      if (isConnected && client && (selectedDevice?.apiId || selectedDevice?._id)) {
+        const resp = await client.sendDownlink(activeOrganisation, selectedDevice, effectiveModuleId, cmd.value);
+        const msg = resp?.sendDownlink?.message || 'Command Dispatched!';
+        setDownlinkResultMsg(msg);
       } else {
         await new Promise(resolve => setTimeout(resolve, 1000));
+        setDownlinkResultMsg('Command Dispatched (Demo)');
       }
       loop.stop();
       sendAnim.setValue(0);
       setDownlinkSending(false);
       setDownlinkSent(true);
-      setTimeout(() => { setDownlinkSent(false); setModal(null); }, 1200);
+      setTimeout(() => { setDownlinkSent(false); setModal(null); }, 1500);
     } catch (error) {
       loop.stop();
       sendAnim.setValue(0);
       setDownlinkSending(false);
       showToast(error.message || 'Downlink failed.');
     }
-  }, [isConnected, client, selectedDevice, activeOrganisation, downlinkModule, sendAnim, showToast]);
+  }, [isConnected, client, selectedDevice, activeOrganisation, downlinkModule, modules, sendAnim, showToast]);
 
   const pickImage = useCallback(async () => {
     try {
@@ -967,7 +995,7 @@ function AppContent() {
         {!coords ? <View style={styles.miniMapMessage}><Icon name="map-marker-off-outline" size={17} color={C.greenDark} /><Text style={styles.miniMapText}>Coordinates were not returned for this device.</Text></View> : null}
       </View>
       <View style={styles.expandedDetails}><Text style={styles.expandedLine}>{device.loc}{coords ? ` · ${device.position.lat}, ${device.position.lng}` : ''}</Text></View>
-      <View style={styles.detailActions}><ActionButton title="Refresh data" secondary onPress={refresh} /><ActionButton title="Send Downlink" onPress={() => { setDownlinkValue('{}'); setDownlinkModule(modules.find(item => item.moduleType === 'DOWNLINK_INTERFACE')?._id || ''); setModal('downlink'); }} /></View>
+      <View style={styles.detailActions}><ActionButton title="Refresh data" secondary onPress={refresh} /><ActionButton title="Send Downlink" onPress={() => { setDownlinkValue('{}'); openDownlinkModal(); }} /></View>
     </ScrollView>;
   };
 
@@ -1149,12 +1177,16 @@ function AppContent() {
     if (modal === 'downlink') {
       const pulseOpacity = sendAnim.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] });
       const pulseScale = sendAnim.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1.08] });
+      const availableDlModules = modules.filter(m => m.moduleType === 'DOWNLINK_INTERFACE' || /downlink/i.test(m.label || '') || /downlink/i.test(m.moduleType || ''));
+      const activeDlMod = modules.find(m => m._id === downlinkModule) || availableDlModules[0] || modules[0];
+      const hasNoDownlinkModule = isConnected && !activeDlMod;
+
       return (
         <Sheet visible title="Send Downlink" subtitle={`2-tap quick commands for ${selectedDevice?.name || 'this device'}`} onClose={() => { if (!downlinkSending) { setDownlinkSent(false); setModal(null); } }}>
           {downlinkSent ? (
             <View style={styles.downlinkSuccessBox}>
               <Icon name="check-circle" size={48} color={C.green} />
-              <Text style={styles.downlinkSuccessText}>Command Dispatched!</Text>
+              <Text style={styles.downlinkSuccessText}>{downlinkResultMsg || 'Command Dispatched!'}</Text>
             </View>
           ) : downlinkSending ? (
             <View style={styles.downlinkSuccessBox}>
@@ -1165,6 +1197,33 @@ function AppContent() {
             </View>
           ) : (
             <>
+              {hasNoDownlinkModule ? (
+                <View style={styles.downlinkWarningCard}>
+                  <Icon name="alert-circle" size={22} color="#E5AE37" />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.downlinkWarningTitle}>No Downlink Interface Configured</Text>
+                    <Text style={styles.downlinkWarningBody}>
+                      This Ginjer organization has no Downlink Interface module. To dispatch instructions to physical hardware, create a Downlink Interface module in your Ginjer console.
+                    </Text>
+                  </View>
+                </View>
+              ) : activeDlMod ? (
+                <View style={styles.downlinkInterfaceCard}>
+                  <Icon name="lan-connect" size={16} color={C.greenDark} />
+                  <Text style={styles.downlinkInterfaceLabel} numberOfLines={1}>
+                    Interface: <Text style={{ fontWeight: '700' }}>{activeDlMod.label || activeDlMod.moduleType}</Text>
+                  </Text>
+                  {availableDlModules.length > 1 ? (
+                    <Pressable onPress={() => {
+                      const nextIdx = (availableDlModules.findIndex(m => m._id === activeDlMod._id) + 1) % availableDlModules.length;
+                      setDownlinkModule(availableDlModules[nextIdx]._id);
+                    }}>
+                      <Text style={styles.downlinkSwitchText}>Switch</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              ) : null}
+
               <Text style={[styles.fieldLabel, { marginBottom: 8 }]}>Quick Presets (Tap to send)</Text>
               <View style={styles.quickCmdGrid}>
                 {QUICK_COMMANDS.map(cmd => (
@@ -1181,7 +1240,20 @@ function AppContent() {
               
               <View style={styles.sheetActions}>
                 <ActionButton title="Cancel" secondary onPress={() => setModal(null)} />
-                <ActionButton title="Send JSON" onPress={() => { let v; try { v = JSON.parse(downlinkValue); } catch { showToast('Invalid JSON.'); return; } sendQuickDownlink({ label: 'JSON', icon: 'code-json', value: v, color: C.blue }); }} />
+                <ActionButton title="Send JSON" onPress={() => {
+                  let v;
+                  try {
+                    v = JSON.parse(downlinkValue);
+                  } catch {
+                    showToast('Invalid JSON. Must be format {"command": "..."}');
+                    return;
+                  }
+                  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+                    showToast('Downlink payload must be a JSON object, e.g. {"command": "reset"}');
+                    return;
+                  }
+                  sendQuickDownlink({ label: 'JSON', icon: 'code-json', value: v, color: C.blue });
+                }} />
               </View>
             </>
           )}
@@ -1288,6 +1360,12 @@ const styles = StyleSheet.create({
   autoRuleMeta: { color: C.muted, fontSize: 11, marginTop: 2 },
   autoAnalyticsLink: { flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: 12, padding: 13, borderRadius: 12, backgroundColor: C.greenPale, borderWidth: 1, borderColor: '#D6E8B7' },
   autoAnalyticsText: { flex: 1, color: C.greenDark, fontSize: 13, fontWeight: '600' },
+  downlinkWarningCard: { flexDirection: 'row', gap: 10, backgroundColor: '#FFFBEA', borderWidth: 1, borderColor: '#F1D27C', borderRadius: 10, padding: 10, marginBottom: 12 },
+  downlinkWarningTitle: { fontSize: 13, fontWeight: '700', color: '#946600', marginBottom: 2 },
+  downlinkWarningBody: { fontSize: 11, color: '#745200', lineHeight: 16 },
+  downlinkInterfaceCard: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: C.greenPale, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, marginBottom: 10 },
+  downlinkInterfaceLabel: { flex: 1, fontSize: 11, color: C.greenDark },
+  downlinkSwitchText: { fontSize: 11, fontWeight: '700', color: C.green, paddingHorizontal: 4 },
   deviceCardCompact: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 10, backgroundColor: C.white, elevation: 1 },
   compactDot: { width: 8, height: 8, borderRadius: 4 },
 });
