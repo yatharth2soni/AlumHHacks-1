@@ -2,8 +2,8 @@ const queries = {
   signIn: `query SignIn($auth: SignInInput!) { signIn(auth: $auth) { _id firstName lastName emailId token defaultAccount organisationId organisationDetails { _id name } } }`,
   organisations: `query OrgList { accounts { organisationId name isActive isAccepted isAdmin } }`,
   projects: `query ProjectList($params: ParamInput!) { projectOverview(params: $params) { _id name description active organisationId location { placeName lat lng } userCount { _id userCount } deviceCount { _id deviceCount } clusterCount { _id clusterCount } nonLoRaWANDeviceCount { _id nonLoRaWANDeviceCount } } }`,
-  devices: `query DeviceList($params: ParamInput!) { projects(params: $params) { _id name clusters { _id name devices { _id name devEui hardwareId timestamp } } } }`,
-  details: `query DeviceDetails($params: ParamInput!) { projects(params: $params) { _id name clusters { _id name devices { _id name description devEui organisationId projectId clusterId hardwareId networkId hardwareType timestamp deleted position { placeName lat lng } outputs { outputId outputName value label color } attributes { attributeId attributeName value } } } } }`,
+  devices: `query DeviceList($params: ParamInput!) { projects(params: $params) { _id name devices { _id name devEui hardwareId timestamp } clusters { _id name devices { _id name devEui hardwareId timestamp } } } }`,
+  details: `query DeviceDetails($params: ParamInput!) { projects(params: $params) { _id name devices { _id name description devEui organisationId projectId clusterId hardwareId networkId hardwareType timestamp deleted position { placeName lat lng } outputs { outputId outputName value label color } attributes { attributeId attributeName value } } clusters { _id name devices { _id name description devEui organisationId projectId clusterId hardwareId networkId hardwareType timestamp deleted position { placeName lat lng } outputs { outputId outputName value label color } attributes { attributeId attributeName value } } } } }`,
   modules: `query ModuleList($params: ParamInput!) { modules(params: $params) { _id label moduleType organisationId } }`,
   downlink: `query SendDownlink($action: SendDownlinkInput!) { sendDownlink(action: $action) { timestamp type message } }`,
 };
@@ -152,8 +152,14 @@ export class GinjerClient {
     ]);
     const listed = deviceResult.status === 'fulfilled' ? flattenDevices(deviceResult.value?.projects) : [];
     const detailed = detailResult.status === 'fulfilled' ? flattenDevices(detailResult.value?.projects) : [];
-    const detailsById = new Map(detailed.map(device => [device._id, device]));
-    const devices = listed.map(device => normalizeDevice({ ...device, ...(detailsById.get(device._id) || {}) }));
+    const allRaw = new Map();
+    detailed.forEach(d => { if (d._id) allRaw.set(d._id, d); });
+    listed.forEach(d => {
+      if (d._id) {
+        allRaw.set(d._id, { ...(allRaw.get(d._id) || {}), ...d });
+      }
+    });
+    const devices = Array.from(allRaw.values()).map(device => normalizeDevice(device));
     const errors = [];
     if (deviceResult.status === 'rejected') errors.push(`Device list note: ${deviceResult.reason.message}`);
     if (detailResult.status === 'rejected') errors.push(`Device details note: ${detailResult.reason.message}`);

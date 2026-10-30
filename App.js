@@ -9,6 +9,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -294,6 +295,7 @@ function AppContent() {
   const [token, setToken] = useState('');
   const [loginError, setLoginError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [demoMode, setDemoMode] = useState(true);
   const [devices, setDevices] = useState(demoDevices);
   const [organisations, setOrganisations] = useState([]);
@@ -520,6 +522,15 @@ function AppContent() {
     return () => listener.remove();
   }, [back]);
 
+  // 20-second automatic polling for live Ginjer updates
+  useEffect(() => {
+    if (!isConnected || !activeOrganisation || !activeProject) return;
+    const interval = setInterval(() => {
+      refresh({ silent: true });
+    }, 20000);
+    return () => clearInterval(interval);
+  }, [isConnected, activeOrganisation, activeProject, refresh]);
+
   useEffect(() => {
     if (route !== 'map' || positionableDevices.length === 0) return;
     const timer = setTimeout(() => {
@@ -702,16 +713,24 @@ function AppContent() {
     setProfile(DEMO_PROFILE); setProfileDraft(DEMO_PROFILE); setProfilePhotoUri(null); setProfilePhotoDraftUri(null); setRoute('login'); setTab('devices'); setModal(null); showToast('Signed out.');
   };
 
-  const refresh = async () => {
+  const refresh = useCallback(async ({ silent = false } = {}) => {
     if (!client || !activeOrganisation || !activeProject) return;
-    setLoading(true);
+    if (!silent) setRefreshing(true);
     try {
       const result = await client.getProjectData(activeOrganisation, activeProject);
-      setDevices(result.devices); setModules(result.modules);
-      showToast('Device data refreshed from Ginjer.');
-    } catch (error) { showToast(`Refresh failed: ${error.message}`); }
-    finally { setLoading(false); }
-  };
+      setDevices(result.devices);
+      setModules(result.modules);
+      if (selectedDevice?.apiId) {
+        const updated = result.devices.find(d => d.apiId === selectedDevice.apiId);
+        if (updated) setSelectedDevice(updated);
+      }
+      if (!silent) showToast('Data refreshed live from Ginjer.');
+    } catch (error) {
+      if (!silent) showToast(`Refresh failed: ${error.message}`);
+    } finally {
+      if (!silent) setRefreshing(false);
+    }
+  }, [client, activeOrganisation, activeProject, selectedDevice, showToast]);
 
   const chooseOrganisation = async organisation => {
     try { await loadOrganisation(organisation); }
@@ -818,8 +837,24 @@ function AppContent() {
       <Icon name="chevron-down" size={19} color={C.muted} />
     </Pressable>
     <SearchField value={query} onChangeText={setQuery} style={{ marginHorizontal: 16, marginTop: 12 }} />
+    <View style={styles.liveBar}>
+      <View style={styles.liveIndicator}>
+        <View style={[styles.livePulseDot, { backgroundColor: isConnected ? C.green : C.amber }]} />
+        <Text style={styles.liveBarText}>
+          {isConnected ? `Live Ginjer sync · 20s auto-refresh` : 'Demo preview mode'}
+        </Text>
+      </View>
+      <Pressable accessibilityRole="button" accessibilityLabel="Sync Ginjer data now" onPress={() => refresh({ silent: false })} hitSlop={10} style={({ pressed }) => [styles.syncButton, pressed && { opacity: 0.6 }]}>
+        <Icon name="sync" size={13} color={C.greenDark} />
+        <Text style={styles.syncButtonText}>{refreshing ? 'Syncing…' : 'Sync'}</Text>
+      </Pressable>
+    </View>
     <View style={styles.listSummary}><Text style={styles.summaryText}>{filteredDevices.length} devices</Text><Text style={styles.summaryText}>Updated just now</Text></View>
-    <ScrollView contentContainerStyle={styles.deviceList} keyboardShouldPersistTaps="handled">
+    <ScrollView
+      contentContainerStyle={styles.deviceList}
+      keyboardShouldPersistTaps="handled"
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => refresh({ silent: false })} colors={[C.green]} tintColor={C.green} />}
+    >
       {filteredDevices.length ? filteredDevices.map((device, index) => deviceView === 'compact' ? <DeviceCardCompact key={device.apiId || device.id || index} device={device} onPress={() => goToDevice(device)} /> : <DeviceCard key={device.apiId || device.id || index} device={device} onPress={() => goToDevice(device)} />) : <View style={styles.emptyBox}><Icon name="devices" size={28} color="#A4AAA5" /><Text style={styles.emptyText}>No devices match this search.</Text></View>}
       <Pressable onPress={() => { setPreviousRoute(route); setRoute('notifications'); }} style={styles.notificationsLink}><Icon name="bell-badge-outline" size={17} color={C.greenDark} /><Text style={styles.notificationsLinkText}>View notifications</Text><Icon name="chevron-right" size={18} color={C.muted} /></Pressable>
     </ScrollView>
@@ -1209,7 +1244,13 @@ const styles = StyleSheet.create({
   listTopBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 17, paddingTop: 10, paddingBottom: 5 }, sectionTitle: { color: C.ink, fontSize: 19, lineHeight: 26, fontWeight: '700' }, topActions: { flexDirection: 'row', gap: 2 }, iconButton: { minWidth: 38, minHeight: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 10 }, pageHeader: { height: 52, zIndex: 4, flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, backgroundColor: '#FFFFFFF2' }, pageTitle: { flex: 1, textAlign: 'center', color: C.ink, fontSize: 16, fontWeight: '700' }, pageRight: { minWidth: 38, alignItems: 'flex-end' },
   projectSelector: { minHeight: 56, marginHorizontal: 16, marginTop: 8, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#E5E9E4', borderRadius: 14, backgroundColor: C.white, shadowColor: '#1A211D', shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 }, selectorCaption: { color: '#A1A7A2', fontSize: 9, lineHeight: 12, fontWeight: '700', letterSpacing: 0.7 }, selectorName: { color: C.ink, fontSize: 13, fontWeight: '600', marginTop: 2 },
   searchField: { minHeight: 46, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderColor: '#E3E7E1', borderRadius: 14, backgroundColor: C.white, shadowColor: '#1A211D', shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 1 }, searchInput: { flex: 1, minWidth: 0, height: 44, padding: 0, color: C.ink, fontSize: 13 },
-  listSummary: { paddingHorizontal: 18, paddingTop: 13, paddingBottom: 7, flexDirection: 'row', justifyContent: 'space-between' }, summaryText: { color: '#929A94', fontSize: 10, fontWeight: '500' }, deviceList: { gap: 10, paddingHorizontal: 14, paddingTop: 4, paddingBottom: 16 }, deviceCard: { minHeight: 114, flexDirection: 'row', alignItems: 'center', gap: 12, padding: 13, borderRadius: 16, backgroundColor: C.white, borderWidth: 1, borderColor: '#EDF0EB', elevation: 2, shadowColor: '#1A211D', shadowOpacity: 0.04, shadowRadius: 10, shadowOffset: { width: 0, height: 3 } }, deviceThumb: { alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#F3F6ED', borderWidth: 1, borderColor: '#E8EFE0' }, deviceCardBody: { flex: 1, minWidth: 0, alignSelf: 'stretch', justifyContent: 'center' }, deviceName: { color: C.ink, fontSize: 13, fontWeight: '700' }, deviceId: { color: '#929A94', fontSize: 9, marginTop: 2 }, deviceLocation: { color: '#7C857E', fontSize: 10, marginTop: 4 }, chipRow: { flexDirection: 'row', gap: 5, marginTop: 7 }, statusChip: { maxWidth: 100, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 6 }, statusChipText: { fontSize: 9, fontWeight: '600' }, deviceCardMeta: { width: 63, alignItems: 'flex-end', alignSelf: 'stretch', justifyContent: 'center' }, onlineDot: { width: 8, height: 8, borderRadius: 5, marginBottom: 4 }, lastLabel: { color: '#A1A7A2', fontSize: 8 }, lastTime: { maxWidth: '100%', marginTop: 2, color: '#626B64', fontSize: 8, lineHeight: 11, textAlign: 'right' },
+  listSummary: { paddingHorizontal: 18, paddingTop: 13, paddingBottom: 7, flexDirection: 'row', justifyContent: 'space-between' }, summaryText: { color: '#929A94', fontSize: 10, fontWeight: '500' },
+  liveBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginHorizontal: 16, marginTop: 8, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: '#F2F7EC', borderWidth: 1, borderColor: '#E3ECD6' },
+  liveIndicator: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  livePulseDot: { width: 7, height: 7, borderRadius: 4 },
+  liveBarText: { fontSize: 11, fontWeight: '600', color: C.greenDark },
+  syncButton: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: C.white, borderWidth: 1, borderColor: '#D7E5C7' },
+  syncButtonText: { fontSize: 11, fontWeight: '700', color: C.greenDark }, deviceList: { gap: 10, paddingHorizontal: 14, paddingTop: 4, paddingBottom: 16 }, deviceCard: { minHeight: 114, flexDirection: 'row', alignItems: 'center', gap: 12, padding: 13, borderRadius: 16, backgroundColor: C.white, borderWidth: 1, borderColor: '#EDF0EB', elevation: 2, shadowColor: '#1A211D', shadowOpacity: 0.04, shadowRadius: 10, shadowOffset: { width: 0, height: 3 } }, deviceThumb: { alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#F3F6ED', borderWidth: 1, borderColor: '#E8EFE0' }, deviceCardBody: { flex: 1, minWidth: 0, alignSelf: 'stretch', justifyContent: 'center' }, deviceName: { color: C.ink, fontSize: 13, fontWeight: '700' }, deviceId: { color: '#929A94', fontSize: 9, marginTop: 2 }, deviceLocation: { color: '#7C857E', fontSize: 10, marginTop: 4 }, chipRow: { flexDirection: 'row', gap: 5, marginTop: 7 }, statusChip: { maxWidth: 100, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 6 }, statusChipText: { fontSize: 9, fontWeight: '600' }, deviceCardMeta: { width: 63, alignItems: 'flex-end', alignSelf: 'stretch', justifyContent: 'center' }, onlineDot: { width: 8, height: 8, borderRadius: 5, marginBottom: 4 }, lastLabel: { color: '#A1A7A2', fontSize: 8 }, lastTime: { maxWidth: '100%', marginTop: 2, color: '#626B64', fontSize: 8, lineHeight: 11, textAlign: 'right' },
   tabSafeArea: { backgroundColor: C.white }, bottomTabs: { minHeight: 60, height: 62, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', borderTopWidth: 1, borderTopColor: '#EEF1EC', backgroundColor: C.white, shadowColor: '#000000', shadowOpacity: 0.05, shadowRadius: 10, shadowOffset: { width: 0, height: -3 }, elevation: 10, zIndex: 10 }, tabButton: { flex: 1, height: '100%', alignItems: 'center', justifyContent: 'center', paddingVertical: 4, gap: 2 }, tabButtonPressed: { opacity: 0.6 }, tabLabel: { color: '#999F9A', fontSize: 9, lineHeight: 12, fontWeight: '500' }, tabLabelActive: { color: C.greenDark, fontWeight: '700' }, notificationsLink: { minHeight: 44, marginTop: 5, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 10, backgroundColor: '#F1F6E9' }, notificationsLinkText: { flex: 1, color: C.greenDark, fontSize: 12, fontWeight: '600' },
   emptyBox: { minHeight: 170, alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 18 }, emptyInline: { minHeight: 56, justifyContent: 'center' }, emptyText: { color: '#929A94', fontSize: 13, textAlign: 'center' },
   mapScreen: { flex: 1, backgroundColor: '#FFFFFF' }, mapHeader: { height: 48, zIndex: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingLeft: 16, paddingRight: 8, backgroundColor: '#FFFFFFF0' }, mapOverlay: { position: 'absolute', zIndex: 2, top: 58, left: 12, right: 12 }, mapSearch: { borderColor: '#E5EAE2' }, mapNotice: { position: 'absolute', zIndex: 1, top: 120, left: 12, right: 12, padding: 8, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 10, backgroundColor: '#FFFFFFEE' }, mapNoticeText: { flex: 1, color: '#6E786F', fontSize: 9, lineHeight: 13 }, mapCount: { position: 'absolute', bottom: 12, left: 12, paddingHorizontal: 10, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 10, backgroundColor: '#FFFFFFF2', elevation: 2 }, mapCountText: { color: '#6F7970', fontSize: 10 }, currentLocationMarker: { width: 22, height: 22, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: C.white, borderRadius: 12, backgroundColor: '#D94343', elevation: 5, shadowColor: '#641717', shadowOpacity: 0.25, shadowRadius: 5, shadowOffset: { width: 0, height: 2 } }, currentLocationMarkerCenter: { width: 5, height: 5, borderRadius: 3, backgroundColor: C.white }, markerBubble: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: C.white, borderRadius: 19, borderBottomLeftRadius: 5, elevation: 4 }, mapDeviceCard: { position: 'absolute', bottom: 12, left: 12, right: 12, minHeight: 66, flexDirection: 'row', alignItems: 'center', gap: 9, padding: 10, borderRadius: 13, backgroundColor: C.white, elevation: 5, shadowColor: '#162015', shadowOpacity: 0.14, shadowRadius: 10, shadowOffset: { width: 0, height: 3 } }, mapDeviceName: { color: C.ink, fontSize: 13, fontWeight: '700' }, mapDeviceMeta: { color: C.muted, fontSize: 10, marginTop: 3 },
