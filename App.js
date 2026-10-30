@@ -308,9 +308,10 @@ function AppContent() {
   const [downlinkSent, setDownlinkSent] = useState(false);
   const [autoRules, setAutoRules] = useState(DEMO_AUTOMATION_RULES.map(r => ({ ...r })));
   const [organizationQuery, setOrganizationQuery] = useState('');
+  const [ginjerEnv, setGinjerEnv] = useState('dev');
   const sendAnim = useRef(new Animated.Value(0)).current;
   const mapRef = useRef(null);
-  const client = useMemo(() => serverUrl ? new GinjerClient(serverUrl) : null, [serverUrl]);
+  const client = useMemo(() => serverUrl ? new GinjerClient(serverUrl, ginjerEnv) : null, [serverUrl, ginjerEnv]);
   const isConnected = connectedToBackend && !demoMode;
   const hasTabs = ['devices', 'locations', 'automation', 'profile'].includes(route);
   const positionableDevices = useMemo(() => {
@@ -710,6 +711,14 @@ function AppContent() {
         <View style={styles.loginBrand}><Image source={require('./assets/reference/senra-logo.png')} style={styles.ginjerLogo} resizeMode="contain" /></View>
         <Text style={styles.loginTagline}>Monitor and manage your connected devices</Text>
         <Image source={require('./assets/reference/login-illustration.png')} style={styles.loginIllustration} resizeMode="contain" />
+        <View style={styles.envSelector}>
+          <Pressable onPress={() => { setGinjerEnv('dev'); client?.setEnvironment('dev'); setLoginError(''); }} style={[styles.envTab, ginjerEnv === 'dev' && styles.envTabActive]}>
+            <Text style={[styles.envTabText, ginjerEnv === 'dev' && styles.envTabTextActive]}>dev.ginjer.io (Dev)</Text>
+          </Pressable>
+          <Pressable onPress={() => { setGinjerEnv('prod'); client?.setEnvironment('prod'); setLoginError(''); }} style={[styles.envTab, ginjerEnv === 'prod' && styles.envTabActive]}>
+            <Text style={[styles.envTabText, ginjerEnv === 'prod' && styles.envTabTextActive]}>ginjer.io (Prod)</Text>
+          </Pressable>
+        </View>
         <View style={styles.authTabs}>
           <Pressable onPress={() => { setLoginMode('password'); setLoginError(''); }} style={[styles.authTab, loginMode === 'password' && styles.authTabActive]}><Text style={[styles.authTabText, loginMode === 'password' && styles.authTabTextActive]}>Email and password</Text></Pressable>
           <Pressable onPress={() => { setLoginMode('token'); setLoginError(''); }} style={[styles.authTab, loginMode === 'token' && styles.authTabActive]}><Text style={[styles.authTabText, loginMode === 'token' && styles.authTabTextActive]}>API token</Text></Pressable>
