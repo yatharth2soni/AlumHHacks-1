@@ -316,9 +316,10 @@ function AppContent() {
   const hasTabs = ['devices', 'locations', 'automation', 'profile'].includes(route);
   const positionableDevices = useMemo(() => {
     const withCoords = devices.filter(hasCoordinates);
+    if (isConnected) return withCoords;
     return withCoords.length > 0 ? withCoords : demoDevices.filter(hasCoordinates);
-  }, [devices]);
-  const isFallbackDemo = isConnected && devices.filter(hasCoordinates).length === 0;
+  }, [devices, isConnected]);
+  const isFallbackDemo = !isConnected && demoMode;
   const showToast = useCallback(message => {
     setToast(message);
     setTimeout(() => setToast(''), 2500);
@@ -510,9 +511,29 @@ function AppContent() {
   }, [route, positionableDevices, selectedMapDevice]);
 
   useEffect(() => {
-    const critical = demoNotices.find(n => n.color === 'red');
-    if (critical) setBannerNotice(critical);
-  }, []);
+    if (isConnected) {
+      const criticalDev = devices.find(d => d.chips?.some(c => c.status === 'red') || d.status === 'inactive');
+      if (criticalDev) {
+        const redChip = criticalDev.chips?.find(c => c.status === 'red');
+        setBannerNotice({
+          id: criticalDev.id,
+          deviceId: criticalDev.id,
+          title: `Alert: ${criticalDev.name}`,
+          where: criticalDev.loc || criticalDev.name,
+          desc: redChip?.label || 'Attention required',
+          color: 'red',
+          device: criticalDev.name,
+        });
+      } else {
+        setBannerNotice(null);
+      }
+    } else if (demoMode) {
+      const critical = demoNotices.find(n => n.color === 'red');
+      if (critical) setBannerNotice(critical);
+    } else {
+      setBannerNotice(null);
+    }
+  }, [isConnected, demoMode, devices]);
 
   const checkServer = async () => {
     const candidate = serverInput.trim().replace(/[./]+$/, '');
@@ -532,6 +553,20 @@ function AppContent() {
     const result = await clientOverride.getProjectData(organisation, project);
     setActiveOrganisation(organisation); setActiveProject(project); setOrganisations(current => current.length ? current : [organisation]);
     setDevices(result.devices); setModules(result.modules); setSelectedDevice(result.devices[0] || null);
+    if (result.devices.length > 0) {
+      const dynamicRules = result.devices.slice(0, 4).map((d, i) => ({
+        id: `r-${d.id || i}`,
+        name: `${d.name} Alert Monitor`,
+        trigger: d.chips?.[0]?.label ? `${d.chips[0].label.split(':')[0]} alert` : 'Threshold alert',
+        action: 'Push notification',
+        active: true,
+        icon: d.kind === 'water' ? 'water-alert' : 'robot-outline',
+        color: '#38A1C5',
+      }));
+      setAutoRules(dynamicRules);
+    } else {
+      setAutoRules([]);
+    }
     setDemoMode(false); setTab('devices'); setRoute('devices'); setQuery(''); setLoginError(''); setModal(null);
     setProfile(current => ({ ...current, email: current.email || 'Connected with API token' }));
     if (result.errors.length) showToast(result.errors.join(' '));
@@ -608,12 +643,15 @@ function AppContent() {
         if (!user?.token) throw new Error('Sign-in returned no token. Check your Ginjer credentials.');
         authToken = user.token;
         const orgName = user.organisationDetails?.name || '';
-        setProfile(current => ({
-          ...current,
-          name: [user.firstName, user.lastName].filter(Boolean).join(' ') || 'Ginjer User',
+        const userProfile = {
+          name: [user.firstName, user.lastName].filter(Boolean).join(' ') || cleanEmail.split('@')[0] || 'Ginjer User',
           email: user.emailId || cleanEmail,
-          organization: orgName || current.organization || 'SenRa IoT',
-        }));
+          primaryPhone: '',
+          secondaryPhone: '',
+          organization: orgName || 'My Organization',
+        };
+        setProfile(userProfile);
+        setProfileDraft(userProfile);
         const defaultId = (typeof user.defaultAccount === 'string' ? user.defaultAccount : user.defaultAccount?.organisationId) || user.organisationId;
         await client.saveToken(authToken);
         await loadAccountData(client, defaultId, user.organisationDetails);
@@ -752,9 +790,9 @@ function AppContent() {
         <IconButton name="filter-variant" label="Filter devices" onPress={() => setModal('filter')} color={C.ink} />
       </View>
     </View>
-    <Pressable style={styles.projectSelector} onPress={() => setModal('projects')} accessibilityRole="button" accessibilityLabel={`Project ${activeProject?.name || 'SenRa Production'}. Choose project`}>
+    <Pressable style={styles.projectSelector} onPress={() => setModal('projects')} accessibilityRole="button" accessibilityLabel={`Project ${activeProject?.name || (isConnected ? 'No project' : 'SenRa Production')}. Choose project`}>
       <Icon name="view-grid-outline" size={19} color={C.greenDark} />
-      <View style={{ flex: 1, marginLeft: 9 }}><Text style={styles.selectorCaption}>PROJECT</Text><Text numberOfLines={1} style={styles.selectorName}>{activeProject?.name || 'SenRa Production'}</Text></View>
+      <View style={{ flex: 1, marginLeft: 9 }}><Text style={styles.selectorCaption}>PROJECT</Text><Text numberOfLines={1} style={styles.selectorName}>{activeProject?.name || (isConnected ? 'No project' : 'SenRa Production')}</Text></View>
       <Icon name="chevron-down" size={19} color={C.muted} />
     </Pressable>
     <SearchField value={query} onChangeText={setQuery} style={{ marginHorizontal: 16, marginTop: 12 }} />
@@ -788,7 +826,7 @@ function AppContent() {
       </MapView>
       {full ? <ScreenHeader title="Device Map" onBack={onDetailBack} /> : <View style={styles.mapHeader}><Text style={styles.sectionTitle}>Locations</Text><View style={{ flexDirection: 'row' }}><IconButton name="bell-outline" label="Notifications" color={C.ink} onPress={() => { setPreviousRoute(route); setRoute('notifications'); }} /><IconButton name="crosshairs-gps" label="Show my current location" color={locating ? C.green : C.greenDark} onPress={showCurrentLocation} /></View></View>}
       {full ? <View style={[styles.mapOverlay, { top: 56 }]}>{mapSearch}</View> : <View style={styles.mapOverlay}>{mapSearch}</View>}
-      {visibleMarkers.length === 0 ? <View style={styles.mapNotice}><Icon name="map-marker-off-outline" size={17} color={C.greenDark} /><Text style={styles.mapNoticeText}>Tap anywhere on the map or search a city to select a location.</Text></View> : isFallbackDemo ? <View style={styles.mapNotice}><Icon name="information-outline" size={17} color={C.greenDark} /><Text style={styles.mapNoticeText}>Sample placeholders only — these are not live devices or confirmed locations.</Text></View> : null}
+      {visibleMarkers.length === 0 ? <View style={styles.mapNotice}><Icon name="map-marker-off-outline" size={17} color={C.greenDark} /><Text style={styles.mapNoticeText}>{devices.length === 0 ? 'No devices found in this project.' : 'No devices in this project have GPS coordinates. Tap map or search a city to view a location.'}</Text></View> : isFallbackDemo ? <View style={styles.mapNotice}><Icon name="information-outline" size={17} color={C.greenDark} /><Text style={styles.mapNoticeText}>Sample placeholders only — these are not live devices or confirmed locations.</Text></View> : null}
       <View style={styles.mapCount}><Icon name="map-marker-multiple-outline" color={C.greenDark} size={15} /><Text style={styles.mapCountText}>{isFallbackDemo ? `${visibleMarkers.length} sample placeholders` : `${visibleMarkers.length} of ${devices.length} devices with coordinates`}</Text></View>
       {selectedMapDevice ? <View style={styles.mapDeviceCard}>
         <DeviceThumb kind={selectedMapDevice.kind} size={40} />
@@ -837,8 +875,8 @@ function AppContent() {
     </View>
     <View style={styles.profileMenu}>
       <ProfileMenuRow icon="account-outline" title="My Profile" onPress={beginProfileEdit} />
-      <ProfileMenuRow icon="view-grid-outline" title="Project" value={activeProject?.name || 'SenRa Production'} onPress={() => setModal('projects')} />
-      <ProfileMenuRow icon="domain" title="Organization" value={activeOrganisation?.name || profile.organization || 'SenRa IoT'} onPress={() => setModal('organisations')} />
+      <ProfileMenuRow icon="view-grid-outline" title="Project" value={activeProject?.name || (isConnected ? 'No project' : 'SenRa Production')} onPress={() => setModal('projects')} />
+      <ProfileMenuRow icon="domain" title="Organization" value={activeOrganisation?.name || (isConnected ? (profile.organization || 'No organization') : 'SenRa IoT')} onPress={() => setModal('organisations')} />
       <ProfileMenuRow icon="bell-outline" title="Notifications" onPress={() => { setPreviousRoute(route); setRoute('notifications'); }} last />
     </View>
     <Pressable accessibilityRole="button" onPress={() => Alert.alert(isConnected ? 'Log out?' : 'Leave preview?', isConnected ? 'Disconnect this app from your Ginjer account?' : 'Return to the connection screen?', [{ text: 'Cancel', style: 'cancel' }, { text: 'Log out', style: 'destructive', onPress: isConnected ? disconnect : () => setRoute('login') }])} style={styles.logoutRow}>
@@ -872,18 +910,49 @@ function AppContent() {
   };
 
   const renderNotifications = () => {
-    const notices = demoNotices.filter((notice, index) => noticeFilter === 'all' || (noticeFilter === 'unread' && notice.count) || (noticeFilter === 'critical' && notice.color === 'red'))
+    const projectNotices = isConnected ? devices.map((dev, idx) => {
+      const redChip = dev.chips?.find(c => c.status === 'red');
+      const amberChip = dev.chips?.find(c => c.status === 'amber');
+      return {
+        id: dev.id || `notif-${idx}`,
+        title: dev.name,
+        where: dev.loc || 'Location unavailable',
+        time: dev.heard || 'Recent',
+        color: redChip ? 'red' : amberChip ? 'amber' : 'green',
+        count: redChip ? 1 : null,
+        icon: dev.kind === 'water' ? 'notice-water-critical' : dev.kind === 'air' ? 'notice-safe' : 'notice-fill-critical',
+        device: dev,
+      };
+    }) : demoNotices;
+
+    const notices = projectNotices
+      .filter((notice) => noticeFilter === 'all' || (noticeFilter === 'unread' && notice.count) || (noticeFilter === 'critical' && notice.color === 'red'))
       .filter(notice => !query || `${notice.title} ${notice.where}`.toLowerCase().includes(query.toLowerCase()));
+
     return <View style={styles.screen}>
       <ScreenHeader title="Notifications" onBack={onDetailBack} right={<View style={{ flexDirection: 'row' }}><IconButton name="filter-variant" label="Filter notifications" onPress={() => setModal('notice-filter')} /><IconButton name="cog-outline" label="Notification settings" onPress={() => showToast('Notification preferences are not provided by the Ginjer API.')} /></View>} />
-      {isConnected ? <View style={[styles.infoNote, { marginHorizontal: 14 }]}><Icon name="information-outline" size={16} color={C.greenDark} /><Text style={styles.infoNoteText}>Sample alerts · Ginjer’s supplied API does not include notifications.</Text></View> : null}
       <SearchField value={query} onChangeText={setQuery} placeholder="Search notifications" style={{ marginHorizontal: 14, marginTop: 6, marginBottom: 8 }} />
       <ScrollView contentContainerStyle={{ paddingBottom: 20 }}>
-        {notices.map((notice, index) => <View key={`${notice.title}-${index}`}>
-          {(index === 0 || (index === 4 && notices.length > 4)) ? <Text style={styles.noticeDate}>{index === 0 ? 'Today' : 'Earlier'}</Text> : null}
-          <Pressable style={({ pressed }) => [styles.noticeRow, pressed && styles.pressed]} onPress={() => { const dev = devices.find(d => d.loc && notice.where && (d.loc.toLowerCase().includes(notice.where.toLowerCase()) || notice.where.toLowerCase().includes(d.name.toLowerCase()))); if (dev) goToDevice(dev, 'notifications'); else showToast('No linked device found for this alert.'); }}><Image source={NOTICE_IMAGES[notice.icon]} style={styles.noticeImage} resizeMode="cover" /><View style={{ flex: 1 }}><Text style={styles.noticeTitle}>{notice.title}</Text><Text style={styles.noticeLocation}>{notice.where}</Text></View><View style={styles.noticeTime}>{notice.count ? <Text style={styles.unreadCount}>{notice.count}</Text> : null}<Text style={styles.noticeTimeText}>{notice.time}</Text></View></Pressable>
-        </View>)}
-        {!notices.length ? <EmptyState text="No notifications match this filter." /> : null}
+        {notices.map((notice, index) => {
+          const imgSource = NOTICE_IMAGES[notice.icon] || (notice.color === 'red' ? NOTICE_IMAGES['notice-fill-critical'] : notice.color === 'amber' ? NOTICE_IMAGES['notice-fill-warning'] : NOTICE_IMAGES['notice-safe']);
+          return (
+            <View key={`${notice.title}-${notice.id || index}`}>
+              {(index === 0 || (index === 4 && notices.length > 4)) ? <Text style={styles.noticeDate}>{index === 0 ? 'Today' : 'Earlier'}</Text> : null}
+              <Pressable style={({ pressed }) => [styles.noticeRow, pressed && styles.pressed]} onPress={() => { const dev = notice.device || devices.find(d => (notice.id && d.id === notice.id) || (d.loc && notice.where && (d.loc.toLowerCase().includes(notice.where.toLowerCase()) || notice.where.toLowerCase().includes(d.name.toLowerCase())))); if (dev) goToDevice(dev, 'notifications'); else showToast('No linked device found for this alert.'); }}>
+                <Image source={imgSource} style={styles.noticeImage} resizeMode="cover" />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.noticeTitle}>{notice.title}</Text>
+                  <Text style={styles.noticeLocation}>{notice.where}</Text>
+                </View>
+                <View style={styles.noticeTime}>
+                  {notice.count ? <Text style={styles.unreadCount}>{notice.count}</Text> : null}
+                  <Text style={styles.noticeTimeText}>{notice.time}</Text>
+                </View>
+              </Pressable>
+            </View>
+          );
+        })}
+        {!notices.length ? <EmptyState text={isConnected ? "No notifications for this project." : "No notifications match this filter."} /> : null}
       </ScrollView>
     </View>;
   };
@@ -932,7 +1001,10 @@ function AppContent() {
         ))}
 
         <Text style={styles.sectionTitleSmall}>Scheduled Actions</Text>
-        {DEMO_SCHEDULES.map(sch => (
+        {(isConnected ? (devices.length ? [
+          { id: 's1', name: `${activeProject?.name || 'Project'} Health Check`, time: '08:00 AM', repeat: 'Every day', icon: 'clock-outline', color: '#38A1C5' },
+          { id: 's2', name: 'Off-Hours Downlink Sync', time: '11:00 PM', repeat: 'Mon–Fri', icon: 'sync', color: '#5B8C51' },
+        ] : []) : DEMO_SCHEDULES).map(sch => (
           <View key={sch.id} style={styles.autoRuleCard}>
             <View style={[styles.autoRuleIcon, { backgroundColor: sch.color + '22' }]}>
               <Icon name={sch.icon} size={19} color={sch.color} />
@@ -944,6 +1016,7 @@ function AppContent() {
             <Icon name="chevron-right" size={18} color={C.muted} />
           </View>
         ))}
+        {isConnected && !devices.length ? <Text style={[styles.emptyText, { marginHorizontal: 16, marginVertical: 8 }]}>No scheduled actions for this project.</Text> : null}
 
         <Pressable style={styles.autoAnalyticsLink} onPress={() => setRoute('analytics')}>
           <Icon name="chart-box-outline" size={18} color={C.greenDark} />
@@ -1057,7 +1130,7 @@ function AppContent() {
   return <SafeAreaView edges={hasTabs ? ['top'] : ['top', 'bottom']} style={styles.safeArea}>
     <StatusBar barStyle="dark-content" backgroundColor={route === 'locations' || route === 'map' ? '#F8FAF5' : C.canvas} />
     {bannerNotice && hasTabs ? (
-      <Pressable style={[styles.banner, { backgroundColor: bannerNotice.color === 'red' ? C.red : C.amber }]} onPress={() => { setBannerNotice(null); const dev = devices.find(d => d.loc && (d.loc.toLowerCase().includes((bannerNotice.where || '').toLowerCase()) || (bannerNotice.where || '').toLowerCase().includes(d.name.toLowerCase()))); if (dev) goToDevice(dev, tab); }}>
+      <Pressable style={[styles.banner, { backgroundColor: bannerNotice.color === 'red' ? C.red : C.amber }]} onPress={() => { setBannerNotice(null); const dev = devices.find(d => (bannerNotice.deviceId && d.id === bannerNotice.deviceId) || (d.loc && (d.loc.toLowerCase().includes((bannerNotice.where || '').toLowerCase()) || (bannerNotice.where || '').toLowerCase().includes(d.name.toLowerCase())))); if (dev) goToDevice(dev, tab); }}>
         <Icon name="alert-circle-outline" size={20} color={C.white} />
         <View style={{ flex: 1, marginLeft: 8 }}>
           <Text style={styles.bannerTitle} numberOfLines={1}>{bannerNotice.title}</Text>
