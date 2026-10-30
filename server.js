@@ -4,7 +4,9 @@ const http = require('node:http');
 const os = require('node:os');
 
 const PORT = Number(process.env.ALUMHACKS_PORT || 8787);
-const GINJER_URL = 'https://prodapi.ginjer.io/graphql';
+const GINJER_DEV_URL = 'https://devapi.ginjer.io/graphql';
+const GINJER_PROD_URL = 'https://prodapi.ginjer.io/graphql';
+let currentGinjerUrl = process.env.GINJER_URL || GINJER_DEV_URL;
 const TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
 
 let ginjerToken = '';
@@ -97,19 +99,54 @@ async function proxyGraphql(req, res) {
   if (typeof payload.query !== 'string' || !payload.query.trim()) {
     return json(res, 400, { error: 'A GraphQL query is required.' });
   }
+
+  let targetUrl = req.headers['x-ginjer-url'];
+  if (!targetUrl) {
+    if (req.headers['x-ginjer-env'] === 'prod') targetUrl = GINJER_PROD_URL;
+    else if (req.headers['x-ginjer-env'] === 'dev') targetUrl = GINJER_DEV_URL;
+    else targetUrl = currentGinjerUrl;
+  }
+
   const headers = { 'Content-Type': 'application/json' };
   if (req.headers['x-ginjer-authenticated'] === 'true') {
     if (!tokenIsValid()) return json(res, 401, { error: 'No Ginjer token is stored. Reconnect using your token.' });
     headers.authorization = ginjerToken;
   }
+
   try {
-    const upstream = await fetch(GINJER_URL, {
+    let upstream = await fetch(targetUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify({ query: payload.query, variables: payload.variables || {} }),
       signal: AbortSignal.timeout(30000)
     });
-    const raw = await upstream.text();
+    let raw = await upstream.text();
+    let data;
+    try { data = JSON.parse(raw); } catch {}
+
+    // Smart failover: if signIn returned user details not found on dev, try prod (or vice versa)
+    if (payload.query.includes('signIn(') && data?.errors?.some(e => /user details not found/i.test(e.message))) {
+      const altUrl = targetUrl === GINJER_DEV_URL ? GINJER_PROD_URL : GINJER_DEV_URL;
+      try {
+        const altUpstream = await fetch(altUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ query: payload.query, variables: payload.variables || {} }),
+          signal: AbortSignal.timeout(30000)
+        });
+        const altRaw = await altUpstream.text();
+        const altData = JSON.parse(altRaw);
+        if (altData?.data?.signIn?.token) {
+          targetUrl = altUrl;
+          currentGinjerUrl = altUrl;
+          upstream = altUpstream;
+          raw = altRaw;
+        }
+      } catch {}
+    } else if (data?.data?.signIn?.token) {
+      currentGinjerUrl = targetUrl;
+    }
+
     res.writeHead(upstream.status, {
       'Content-Type': upstream.headers.get('content-type') || 'application/json; charset=utf-8',
       'Cache-Control': 'no-store',

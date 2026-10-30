@@ -70,9 +70,16 @@ export function hasCoordinates(device) {
 }
 
 export class GinjerClient {
-  constructor(baseUrl) { this.baseUrl = baseUrl.replace(/\/$/, ''); }
+  constructor(baseUrl, environment = 'dev') {
+    this.baseUrl = baseUrl.replace(/\/$/, '');
+    this.environment = environment;
+  }
 
-  async saveToken(token) {
+  setEnvironment(env) {
+    this.environment = env;
+  }
+
+  async saveToken(token, environment = this.environment) {
     const response = await fetch(`${this.baseUrl}/api/token`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }),
     });
@@ -85,7 +92,11 @@ export class GinjerClient {
   }
 
   async request(query, variables = {}, authenticated = true) {
-    const headers = { 'Content-Type': 'application/json' };
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Ginjer-Env': this.environment,
+      'X-Ginjer-Url': this.environment === 'prod' ? 'https://prodapi.ginjer.io/graphql' : 'https://devapi.ginjer.io/graphql',
+    };
     if (authenticated) headers['X-Ginjer-Authenticated'] = 'true';
     let response;
     try {
